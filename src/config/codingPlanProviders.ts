@@ -44,12 +44,12 @@ export function detectCodingPlanProvider(
 }
 
 /**
- * 新建 Claude 供应商时，若 `ANTHROPIC_BASE_URL` 命中 Coding Plan 路由表，
+ * 新建 Claude / Codex 供应商时，若命中 Coding Plan 路由表，
  * 自动把 `meta.usage_script` 标记为 token_plan 并启用。
  *
  * - 仅在 `meta.usage_script` 完全缺失时注入，不覆盖用户/UsageScriptModal 已有配置
- * - 仅对 Claude app 生效：后端 `commands/provider.rs` 的 token_plan 分支只处理 Claude
- *   supplier 的 `settings_config.env.ANTHROPIC_BASE_URL`
+ * - Claude：从 `settings_config.env.ANTHROPIC_BASE_URL` 匹配
+ * - Codex：从 `settings_config.config`（TOML 字符串）中提取 `base_url` 匹配
  * - code 置空：Rust 端走专用 `coding_plan::get_coding_plan_quota`，不执行 JS 脚本
  */
 export function injectCodingPlanUsageScript<
@@ -58,13 +58,26 @@ export function injectCodingPlanUsageScript<
     meta?: Record<string, any>;
   },
 >(appId: string, provider: T): T {
-  if (appId !== "claude") return provider;
+  if (appId !== "claude" && appId !== "codex") return provider;
   if (provider.meta?.usage_script) return provider;
 
-  const baseUrl = provider.settingsConfig?.env?.ANTHROPIC_BASE_URL;
-  const codingPlanProvider = detectCodingPlanProvider(
-    typeof baseUrl === "string" ? baseUrl : null,
-  );
+  let baseUrl: string | null = null;
+  if (appId === "claude") {
+    const envBaseUrl = provider.settingsConfig?.env?.ANTHROPIC_BASE_URL;
+    baseUrl = typeof envBaseUrl === "string" ? envBaseUrl : null;
+  } else {
+    // Codex: extract base_url from TOML config string.
+    // The TOML produced by generateThirdPartyConfig always contains exactly one
+    // `base_url = "..."` line under a single [model_providers.<name>] section,
+    // so a simple regex is sufficient here.
+    const configStr = provider.settingsConfig?.config;
+    if (typeof configStr === "string") {
+      const match = configStr.match(/base_url\s*=\s*"([^"]+)"/);
+      baseUrl = match ? match[1] : null;
+    }
+  }
+
+  const codingPlanProvider = detectCodingPlanProvider(baseUrl);
   if (!codingPlanProvider) return provider;
 
   return {

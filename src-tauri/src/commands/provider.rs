@@ -17,6 +17,48 @@ const TEMPLATE_TYPE_TOKEN_PLAN: &str = "token_plan";
 const TEMPLATE_TYPE_BALANCE: &str = "balance";
 const COPILOT_UNIT_PREMIUM: &str = "requests";
 
+/// 从 Codex config.toml 字符串中提取 base_url
+///
+/// Codex 的 settings_config 中 `config` 字段是一段 TOML 文本，结构如下：
+/// ```toml
+/// model_provider = "kimi"
+/// [model_providers.kimi]
+/// base_url = "https://api.kimi.com/coding/v1"
+/// ```
+/// 此函数先取顶层的 `model_provider` 键获得供应商名称，再从对应的
+/// `model_providers.<name>.base_url` 中读取地址。
+/// 解析失败或字段缺失时返回空字符串，调用方以此判断无法进行 Coding Plan 查询。
+fn extract_codex_base_url(config_str: &str) -> String {
+    match config_str.parse::<toml::Value>() {
+        Ok(toml_val) => {
+            let provider_name = toml_val
+                .get("model_provider")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if provider_name.is_empty() {
+                log::debug!("extract_codex_base_url: 'model_provider' key missing or empty");
+                return String::new();
+            }
+            let base_url = toml_val
+                .get("model_providers")
+                .and_then(|mp| mp.get(provider_name))
+                .and_then(|p| p.get("base_url"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if base_url.is_empty() {
+                log::debug!(
+                    "extract_codex_base_url: base_url not found under model_providers.{provider_name}"
+                );
+            }
+            base_url.to_string()
+        }
+        Err(e) => {
+            log::debug!("extract_codex_base_url: failed to parse config TOML: {e}");
+            String::new()
+        }
+    }
+}
+
 /// 获取所有供应商
 #[tauri::command]
 pub fn get_providers(
@@ -248,24 +290,46 @@ async fn query_provider_usage_inner(
     // ── Coding Plan 专用路径 ──
     if template_type == TEMPLATE_TYPE_TOKEN_PLAN {
         // 从供应商配置中提取 API Key 和 Base URL
+        // Claude: env.ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN
+        // Codex:  auth.OPENAI_API_KEY + base_url 内嵌于 config.toml 字符串
         let settings_config = provider
             .map(|p| &p.settings_config)
             .cloned()
             .unwrap_or_default();
-        let env = settings_config.get("env");
-        let base_url = env
-            .and_then(|e| e.get("ANTHROPIC_BASE_URL"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let api_key = env
-            .and_then(|e| {
-                e.get("ANTHROPIC_AUTH_TOKEN")
-                    .or_else(|| e.get("ANTHROPIC_API_KEY"))
-            })
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
 
-        let quota = crate::services::coding_plan::get_coding_plan_quota(base_url, api_key)
+        let (base_url, api_key) = if app_type == AppType::Codex {
+            let key = settings_config
+                .get("auth")
+                .and_then(|a| a.get("OPENAI_API_KEY"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let url = extract_codex_base_url(
+                settings_config
+                    .get("config")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+            );
+            (url, key)
+        } else {
+            let env = settings_config.get("env");
+            let url = env
+                .and_then(|e| e.get("ANTHROPIC_BASE_URL"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let key = env
+                .and_then(|e| {
+                    e.get("ANTHROPIC_AUTH_TOKEN")
+                        .or_else(|| e.get("ANTHROPIC_API_KEY"))
+                })
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            (url, key)
+        };
+
+        let quota = crate::services::coding_plan::get_coding_plan_quota(&base_url, &api_key)
             .await
             .map_err(|e| format!("Failed to query coding plan: {e}"))?;
 

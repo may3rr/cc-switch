@@ -64,6 +64,20 @@ requires_openai_auth = true`;
 
 export const codexProviderPresets: CodexProviderPreset[] = [
   {
+    name: "Kimi For Coding",
+    websiteUrl: "https://www.kimi.com/coding/docs/",
+    apiKeyUrl: "https://kimi.moonshot.cn/coding/console",
+    auth: generateThirdPartyAuth(""),
+    config: generateThirdPartyConfig(
+      "kimi",
+      "https://api.kimi.com/coding/v1",
+      "kimi-for-coding",
+    ),
+    category: "cn_official",
+    icon: "kimi",
+    iconColor: "#6366F1",
+  },
+  {
     name: "OpenAI Official",
     websiteUrl: "https://chatgpt.com/codex",
     isOfficial: true,
